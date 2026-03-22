@@ -1,0 +1,95 @@
+.filter-selector {
+  padding: 1.5rem;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.filter-selector h2 {
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+  color: #1a1a2e;
+}
+
+.filter-options {
+  border: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.filter-options:disabled .filter-radio {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.filter-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.filter-params {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.filter-params label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.filter-params input[type="number"] {
+  width: 80px;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.filter-params input[type="number"]:disabled {
+  background: #f0f0f0;
+  cursor: not-allowed;
+}
+
+.apply-btn {
+  padding: 0.5rem 1.2rem;
+  background: #1a1a2e;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.apply-btn:disabled {
+  background: #999;
+  cursor: not-allowed;
+}
+
+.filter-hint {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: #888;
+  font-style: italic;
+}
