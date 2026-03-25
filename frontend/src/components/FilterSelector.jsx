@@ -45,26 +45,18 @@ export default function FilterSelector({ imageId, onFilterApplied, onError, onLo
       const res = await axios.post(
         '/api/filter',
         { image_id: imageId, filter_type: filterType, params: buildParams() },
-        { responseType: 'blob', timeout: 60000 }
+        { timeout: 120000 }
       );
-      const blob = res.data;
-      const url = URL.createObjectURL(blob);
       const filterLabel = FILTER_OPTIONS.find((o) => o.value === filterType)?.label || filterType;
-      onFilterApplied(url, filterLabel);
+      onFilterApplied(res.data, filterLabel);
     } catch (err) {
       let msg = 'Error al aplicar el filtro. Intente de nuevo.';
       if (err.code === 'ECONNABORTED') {
         msg = 'La solicitud tardó demasiado. Intente de nuevo más tarde.';
       } else if (!err.response) {
         msg = 'No se pudo conectar con el servidor. Verifique su conexión a internet.';
-      } else if (err.response?.data) {
-        try {
-          const text = await err.response.data.text();
-          const json = JSON.parse(text);
-          if (json.error) msg = json.error;
-        } catch {
-          // ignore parse errors, use default message
-        }
+      } else if (err.response?.data?.error) {
+        msg = err.response.data.error;
       }
       onError(msg);
     } finally {

@@ -86,6 +86,75 @@ def _detect_format(file_storage):
     return None, None
 
 
+def _normalize_to_uint8(data: np.ndarray) -> np.ndarray:
+    """Normaliza un array float a uint8 [0, 255]."""
+    dmin, dmax = data.min(), data.max()
+    if dmax - dmin > 0:
+        data = (data - dmin) / (dmax - dmin) * 255.0
+    return data.astype(np.uint8)
+
+
+def _array_to_base64_png(arr: np.ndarray) -> str:
+    """Convierte un array 2D uint8 a string base64 PNG."""
+    import io as _io
+    import base64
+    img = Image.fromarray(arr)
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _load_volume(file_path: str, fmt: str) -> np.ndarray:
+    """Carga un volumen 3D. Para 2D (PNG/JPEG) retorna shape (H, W, 1)."""
+    if fmt == "NIfTI":
+        import nibabel as nib
+        nii = nib.load(file_path)
+        data = np.asarray(nii.dataobj, dtype=np.float64)
+        if data.ndim > 3:
+            data = data[:, :, :, 0]
+        if data.ndim == 2:
+            data = data[:, :, np.newaxis]
+        return data
+    else:
+        img = Image.open(file_path).convert("L")
+        arr = np.array(img, dtype=np.float64)
+        return arr[:, :, np.newaxis]
+
+
+def _get_three_views(file_path: str, fmt: str) -> dict:
+    """Genera los 3 cortes centrales de un volumen como base64 PNG."""
+    vol = _load_volume(file_path, fmt)
+    axial = _normalize_to_uint8(vol[:, :, vol.shape[2] // 2])
+    coronal = _normalize_to_uint8(vol[:, vol.shape[1] // 2, :])
+    sagital = _normalize_to_uint8(vol[vol.shape[0] // 2, :, :])
+    return {
+        "axial": _array_to_base64_png(axial),
+        "coronal": _array_to_base64_png(coronal),
+        "sagital": _array_to_base64_png(sagital),
+    }
+
+
+def _apply_filter_to_volume(vol: np.ndarray, filter_type: str, params: dict) -> np.ndarray:
+    """Aplica un filtro 2D slice-por-slice a un volumen 3D."""
+    from backend.filters.wiener_adaptive import apply_wiener_adaptive
+    from backend.filters.proposal_median import apply_proposal_median
+    from backend.filters.adaptive_median import apply_adaptive_median
+
+    filtered = np.empty_like(vol)
+    for k in range(vol.shape[2]):
+        slc = _normalize_to_uint8(vol[:, :, k])
+        if filter_type == "wiener_adaptive":
+            m = int(params.get("m", 3))
+            n = int(params.get("n", 3))
+            filtered[:, :, k] = apply_wiener_adaptive(slc, m=m, n=n).astype(np.float64)
+        elif filter_type == "proposal_median":
+            filtered[:, :, k] = apply_proposal_median(slc).astype(np.float64)
+        elif filter_type == "adaptive_median":
+            smax = int(params.get("smax", 7))
+            filtered[:, :, k] = apply_adaptive_median(slc, smax=smax).astype(np.float64)
+    return filtered
+
+
 def create_app():
     """Crea y configura la aplicación Flask."""
     app = Flask(__name__)
@@ -144,7 +213,6 @@ def create_app():
         if image_id not in image_store:
             return jsonify({"error": "Imagen no encontrada"}), 404
         uploaded = image_store[image_id]
-        # NIfTI files can't be displayed directly in the browser — convert to PNG
         if uploaded.format == "NIfTI":
             try:
                 import io as _io
@@ -166,6 +234,19 @@ def create_app():
             except Exception:
                 return jsonify({"error": "Error al convertir imagen NIfTI"}), 500
         return send_file(uploaded.file_path)
+
+    @app.route("/api/images/<image_id>/views", methods=["GET"])
+    def get_image_views(image_id):
+        """Retorna los 3 cortes (axial, coronal, sagital) de un volumen NIfTI."""
+        if image_id not in image_store:
+            return jsonify({"error": "Imagen no encontrada"}), 404
+        uploaded = image_store[image_id]
+        try:
+            views = _get_three_views(uploaded.file_path, uploaded.format)
+            return jsonify(views)
+        except Exception as exc:
+            logger.error("Error generating views: %s", exc)
+            return jsonify({"error": "Error al generar vistas"}), 500
 
     @app.route("/api/filter", methods=["POST"])
     def apply_filter():
@@ -191,42 +272,40 @@ def create_app():
             logger.warning("Invalid filter_type: %s", filter_type, extra={"context": ctx})
             return jsonify({"error": "Tipo de filtro no válido"}), 400
 
-        # Validate parameters per filter type
         validation_error = _validate_filter_params(filter_type, params)
         if validation_error:
             logger.warning("Invalid params: %s", validation_error, extra={"context": ctx})
             return jsonify({"error": validation_error}), 400
 
         uploaded = image_store[image_id]
-        engine = FilterEngine()
 
         try:
-            result = engine.apply_filter(
-                uploaded.file_path, filter_type, params
-            )
+            import time as _time
+            start = _time.perf_counter()
+            vol = _load_volume(uploaded.file_path, uploaded.format)
+            filtered_vol = _apply_filter_to_volume(vol, filter_type, params)
+            elapsed_ms = (_time.perf_counter() - start) * 1000.0
+
+            # Generar 3 cortes del volumen filtrado
+            axial = _normalize_to_uint8(filtered_vol[:, :, filtered_vol.shape[2] // 2])
+            coronal = _normalize_to_uint8(filtered_vol[:, filtered_vol.shape[1] // 2, :])
+            sagital = _normalize_to_uint8(filtered_vol[filtered_vol.shape[0] // 2, :, :])
+
+            result = {
+                "axial": _array_to_base64_png(axial),
+                "coronal": _array_to_base64_png(coronal),
+                "sagital": _array_to_base64_png(sagital),
+                "processing_time_ms": round(elapsed_ms, 2),
+            }
         except (ValueError, FileNotFoundError) as exc:
-            logger.error(
-                "Filter error: %s", exc,
-                extra={"context": {**ctx, "stack_trace": traceback.format_exc()}},
-            )
+            logger.error("Filter error: %s", exc, extra={"context": ctx})
             return jsonify({"error": str(exc)}), 400
         except Exception:
-            logger.error(
-                "Internal processing error",
-                extra={"context": {**ctx, "stack_trace": traceback.format_exc()}},
-            )
+            logger.error("Internal processing error", extra={"context": ctx})
             return jsonify({"error": "Error en el procesamiento de imagen"}), 500
 
-        logger.info(
-            "Filter applied successfully in %.2fms",
-            result.processing_time_ms,
-            extra={"context": ctx},
-        )
-        return send_file(
-            result.filtered_image_path,
-            mimetype="image/png",
-            as_attachment=False,
-        )
+        logger.info("Filter applied in %.2fms", elapsed_ms, extra={"context": ctx})
+        return jsonify(result)
 
     # --- Global error handlers ---
 
